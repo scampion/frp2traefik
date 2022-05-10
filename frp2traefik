@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""
+FPR2TRAEFIK enable to synchronize HTTP proxy declared in the reverse proxy to the dynamic proxy.
+
+It will create dedicated file configuration for the traefik file provider
+"""
+import argparse
+import time
+from urllib import request
+import json
+
+
+def get_conf(proxy, args):
+    return f"""
+[http]
+  [http.routers]
+    [http.routers.studio_{proxy['name']}]
+      entryPoints = ["https"]
+      middlewares = ["traefik-forward-auth@docker"]
+      service = "studio_{proxy['name']}"
+      rule = "Host(`{proxy['conf']['custom_domains'][0]}`)"
+      [http.routers.studio_{proxy['name']}.tls]
+        certResolver = "default"
+
+  [http.services]
+    [http.services.studio_{proxy['name']}]
+      [http.services.studio_{proxy['name']}.loadBalancer]
+        [[http.services.studio_{proxy['name']}.loadBalancer.servers]]
+          url = "http://{args.frp_ip}:8888"
+    """
+
+
+def generate_config(args):
+    url = f"http://{args.frp_ip}:7500/api/proxy/http"
+    services = json.loads(request.urlopen(url).read())
+    for proxy in services['proxies']:
+        conf = get_conf(proxy, args)
+        with (open(proxy['name'] + ".toml", "w")) as f:
+            f.writelines(conf)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--frp_ip', nargs='?', help='frp IP', default="127.0.0.1")
+    parser.add_argument('--refresh_rate', nargs='?', help='refresh rate (default disabled, min 15secs)', default=-1)
+    args = parser.parse_args()
+    while True:
+        generate_config(args)
+        if int(args.refresh_rate) > 0:
+            time.sleep(max(15, int(args.refresh_rate)))
+        else:
+            break
